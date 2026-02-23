@@ -1,35 +1,34 @@
 #include <stdio.h>
 #include <stdlib.h>
-#include <stdint.h>
 
-#define MEM_SIZE    4096
-#define HEADER_SIZE 8      // Two ints: [0] = payload size, [1] = allocated flag (1) or free (0)
+#define MEM_SIZE 4096
+#define HEADER_SIZE 8
 
-/* The union ensures heap.bytes starts at an 8-byte aligned address.
-   heap.not_used is never accessed — it exists only to enforce alignment. */
 static union {
     char bytes[MEM_SIZE];
     double not_used;
 } heap;
 
-static int active = 0;  // Tracks whether the heap has been initialized
+static int active = 0;
 
-void detect_leaks();
-
-/* Walks the entire heap at program exit and reports any chunks still allocated. 
-   Registered via atexit() — must not call exit() itself. */
 void detect_leaks() {
     int leak_count = 0;
     size_t leak_bytes = 0;
 
-    char *current = heap.bytes;
-    while (current < heap.bytes + MEM_SIZE) {
-        int *header = (int*)current;
-        if (header[1] == 1) {
+    char *start = heap.bytes;
+    char *end = heap.bytes + MEM_SIZE;
+
+    while (start < end) {
+        int *hold = (int*)start;
+        int storage = hold[0];
+        int is_free = hold[1];
+
+        if (is_free != 0) {
             leak_count++;
-            leak_bytes += header[0];
+            leak_bytes += storage;
         }
-        current = current + HEADER_SIZE + header[0];
+
+        start = start + HEADER_SIZE + storage;
     }
 
     if (leak_count > 0) {
@@ -38,8 +37,7 @@ void detect_leaks() {
     }
 }
 
-/* Sets up the heap as one large free chunk on first use.
-   Registers the leak detector to run at program exit. */
+/* storage[0] = payload size, storage[1] = 0 if free, 1 if allocated */
 static void activate() {
     int *header = (int*)heap.bytes;
     header[0] = MEM_SIZE - HEADER_SIZE;
@@ -48,9 +46,8 @@ static void activate() {
     atexit(detect_leaks);
 }
 
-/* Walks the heap to confirm ptr is a valid payload pointer from mymalloc.
-   Backs up HEADER_SIZE bytes and checks if that address matches any real chunk header.
-   This catches invalid pointers, mid-chunk pointers, and non-heap pointers. */
+/* Walks the heap to confirm ptr matches a real chunk header.
+   Catches invalid pointers, mid-chunk pointers, and non-heap pointers. */
 static int is_valid_chunk(void *ptr) {
     if (ptr == NULL) return 0;
 
@@ -59,38 +56,39 @@ static int is_valid_chunk(void *ptr) {
     if (p < heap.bytes || p >= heap.bytes + MEM_SIZE)
         return 0;
 
-    char *current = heap.bytes;
-    while (current < heap.bytes + MEM_SIZE) {
-        if (current == p) return 1;
-        int *h = (int*)current;
-        current = current + HEADER_SIZE + h[0];
+    char *start = heap.bytes;
+    char *end = heap.bytes + MEM_SIZE;
+
+    while (start < end) {
+        if (start == p) return 1;
+        int *hold = (int*)start;
+        start = start + HEADER_SIZE + hold[0];
     }
 
     return 0;
 }
 
-/* Allocates at least 'size' bytes from the heap.
-   Size is rounded up to the nearest multiple of 8 to maintain alignment.
-   Splits the found chunk if leftover space is large enough for another chunk. */
 void *mymalloc(size_t size, char *file, int line) {
-    if (size == 0) return NULL;
+    if (size == 0) {
+        return NULL;
+    }
 
-    if (active == 0) activate();
-
-    // Round up to nearest multiple of 8
-    size = (size + 7) & ~7;
+    if (active == 0) {
+        activate();
+    }
 
     char *start = heap.bytes;
-    char *end   = heap.bytes + MEM_SIZE;
+    char *end = heap.bytes + MEM_SIZE;
+    size = (size + 7) & ~7;
 
     while (start < end) {
-        int *hold      = (int*)start;
-        size_t storage = hold[0];
-        int is_free    = hold[1];
+        int *hold = (int*)start;
+        int storage = hold[0];
+        int is_free = hold[1];
 
-        if (is_free == 0 && storage >= size) {
-            // Split only if remainder can fit a full header + at least 8 bytes
-            if (storage > size + HEADER_SIZE) {
+        if (is_free == 0 && storage >= (int)size) {
+
+            if (storage > (int)size + HEADER_SIZE) {
                 int *create = (int*)(start + HEADER_SIZE + size);
                 create[0] = storage - size - HEADER_SIZE;
                 create[1] = 0;
@@ -108,8 +106,6 @@ void *mymalloc(size_t size, char *file, int line) {
     return NULL;
 }
 
-/* Frees a previously allocated chunk and coalesces adjacent free chunks.
-   Validates the pointer before freeing — exits with status 2 on any error. */
 void myfree(void *ptr, char *file, int line) {
     if (ptr == NULL) return;
 
@@ -120,7 +116,6 @@ void myfree(void *ptr, char *file, int line) {
 
     int *header = (int*)((char*)ptr - HEADER_SIZE);
 
-    // Double free check
     if (header[1] == 0) {
         fprintf(stderr, "free: Inappropriate pointer (%s:%d)\n", file, line);
         exit(2);
@@ -129,26 +124,55 @@ void myfree(void *ptr, char *file, int line) {
     char *end = heap.bytes + MEM_SIZE;
     header[1] = 0;
 
-    // Coalesce with next chunk if free
-    char *next = (char*)ptr + header[0];
-    if (next < end) {
-        int *next_header = (int*)next;
-        if (next_header[1] == 0)
-            header[0] = header[0] + HEADER_SIZE + next_header[0];
+    // Block is at the start, only check next
+    if ((char*)ptr - HEADER_SIZE == heap.bytes) {
+        char *next = (char*)ptr + header[0];
+
+        if (next < end) {
+            int *next_header = (int*)next;
+            if (next_header[1] == 0) {
+                header[0] = header[0] + HEADER_SIZE + next_header[0];
+            }
+        }
     }
 
-    // Walk back to find the previous chunk and coalesce if free
-    char *current = heap.bytes;
-    while (current < (char*)header) {
-        int *prev_header = (int*)current;
-        char *next_chunk = current + HEADER_SIZE + prev_header[0];
+    // Block is at the end, only check previous
+    else if ((char*)ptr + header[0] == end) {
+        char *current = heap.bytes;
+        int *prev_header = NULL;
 
-        if (next_chunk == (char*)header) {
-            if (prev_header[1] == 0)
-                prev_header[0] = prev_header[0] + HEADER_SIZE + header[0];
-            break;
+        while (current < (char*)header) {
+            prev_header = (int*)current;
+            current = current + HEADER_SIZE + prev_header[0];
         }
 
-        current = next_chunk;
+        if (prev_header != NULL && prev_header[1] == 0) {
+            prev_header[0] = prev_header[0] + HEADER_SIZE + header[0];
+        }
+    }
+
+    // Block is in the middle, check both
+    else {
+        // check next first
+        char *next = (char*)ptr + header[0];
+        int *next_header = (int*)next;
+
+        if (next_header[1] == 0) {
+            // FIX: was "prev_header[0]" which didn't exist yet, now correctly "header[0]"
+            header[0] = header[0] + HEADER_SIZE + next_header[0];
+        }
+
+        // then walk back to find previous
+        char *current = heap.bytes;
+        int *prev_header = NULL;
+
+        while (current < (char*)header) {
+            prev_header = (int*)current;
+            current = current + HEADER_SIZE + prev_header[0];
+        }
+
+        if (prev_header != NULL && prev_header[1] == 0) {
+            prev_header[0] = prev_header[0] + HEADER_SIZE + header[0];
+        }
     }
 }

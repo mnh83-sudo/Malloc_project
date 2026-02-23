@@ -15,7 +15,7 @@
 #define OBJECTS 64
 #define OBJSIZE (MEMSIZE / OBJECTS - HEADERSIZE)
 int
-main (int argc, char **argv)
+main ()
 {
 char *obj[OBJECTS];
 int i, j, errors = 0;

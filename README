@@ -1,5 +1,5 @@
 CS 214 Project 1: My Little malloc()
-Authors: [Your Name] ([your_netid]), [Partner Name] ([partner_netid])
+Authors: [Numair] [mnh83], [Darren Chuang] ([dlc286])
 
 ================================================================================
 DESIGN NOTES
@@ -98,5 +98,3 @@ RUNNING TESTS
 ./test_basic        # Should show all tests PASS
 ./test_coalesce     # Should show all tests PASS
 ./test_errors       # Should print error and exit(2)
-
-================================================================================

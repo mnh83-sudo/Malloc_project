@@ -1,0 +1,102 @@
+CS 214 Project 1: My Little malloc()
+Authors: [Your Name] ([your_netid]), [Partner Name] ([partner_netid])
+
+================================================================================
+DESIGN NOTES
+================================================================================
+
+Memory Structure:
+- Total heap size: 4096 bytes
+- Header size: 8 bytes (two 4-byte integers)
+  * First int: total chunk size including header
+  * Second int: allocation flag (1 = allocated, 0 = free)
+- Minimum chunk size: 16 bytes (8-byte header + 8-byte payload)
+- All allocations are 8-byte aligned
+
+Allocation Strategy:
+- First-fit algorithm
+- Searches from beginning of heap
+- Allocates first free chunk large enough
+- Splits chunks when remaining space >= 16 bytes
+- Rounds size up to nearest multiple of 8
+
+Coalescing:
+- Occurs immediately in myfree()
+- Merges with next adjacent chunk if free
+- Scans to find previous chunk and merges if free
+- Prevents memory fragmentation
+
+Error Detection:
+- Invalid pointers (not from malloc)
+- Pointers not at chunk boundaries
+- Double free attempts
+- Format: "free: Inappropriate pointer (file.c:line)"
+- All errors call exit(2)
+
+Leak Detection:
+- Registered via atexit() during initialization
+- Runs automatically at program termination
+- Walks heap counting allocated chunks
+- Format: "mymalloc: X bytes leaked in Y objects."
+- Does not call exit()
+
+================================================================================
+TEST PLAN
+================================================================================
+
+CORRECTNESS TESTS (Section 3):
+
+test_basic.c - Core functionality
+  Test 1: Basic malloc and free
+  Test 2: Multiple non-overlapping allocations (pattern verification)
+  Test 3: Memory reuse after free
+  Test 4: 8-byte alignment verification
+
+test_coalesce.c - Coalescing verification
+  Test 1: Two adjacent free chunks merge
+  Test 2: Three adjacent free chunks merge
+  Test 3: Reverse-order freeing coalesces correctly
+
+test_errors.c - Error detection
+  Test 1: Invalid pointer (not from malloc)
+  Test 2: Pointer not at chunk start
+  Test 3: Double free
+  Note: Uncomment one test at a time - each exits with error
+
+STRESS TESTS (Section 4):
+
+memgrind.c - Performance and stability testing
+  Workload 1: malloc/free 1 byte 120 times (rapid reuse)
+  Workload 2: malloc 120 objects, then free all (bulk operations)
+  Workload 3: Random alloc/free until 120 allocations (fragmentation)
+  Workload 4: Linked list with 50 nodes (real data structure)
+  Workload 5: Varying sizes 1-128 bytes (size variety)
+  
+  Runs each workload 50 times and reports average time
+
+================================================================================
+COMPILATION
+================================================================================
+
+To compile:
+  make
+
+Creates executables:
+  - memgrind
+  - test_basic
+  - test_coalesce
+  - test_errors
+
+To clean:
+  make clean
+
+================================================================================
+RUNNING TESTS
+================================================================================
+
+./memgrind          # Stress test with timing
+./test_basic        # Should show all tests PASS
+./test_coalesce     # Should show all tests PASS
+./test_errors       # Should print error and exit(2)
+
+================================================================================
